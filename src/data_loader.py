@@ -9,6 +9,6 @@ def load_logreturns():
     return returns
 
 def load_prices():
-    data = yf.download(index, start)
+    data = yf.download(index, start, progress=False)
     prices = data["Close"].squeeze()
     return prices
