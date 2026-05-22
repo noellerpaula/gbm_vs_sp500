@@ -51,6 +51,8 @@ hybrid_project
 ├───setup.py
 └───README.md
 ```
+## References
+Cont, R. (2001). Empirical properties of asset returns: stylized facts and statistical issues. *Quantitative Finance*, 1(2), 223–236.
 ## Work in Progress
 Part 3 (deep learning model) is currently in development. Code and analysis will be added to this repository upon completion.
 
