@@ -45,6 +45,7 @@ hybrid_project
 │   ├───gbm.py
 │   └───models.py
 ├───requirements.txt
+├───setup.py
 └───README.md
 ```
 ## Work in Progress
