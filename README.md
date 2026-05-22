@@ -1,6 +1,7 @@
 # Asset Return Model Comparison: Geometric Brownian Motion vs. Deep Learning
 View the interactive notebook:
 [![nbviewer](https://raw.githubusercontent.com/jupyter/design/master/logos/Badges/nbviewer_badge.svg)](https://nbviewer.org/github/noellerpaula/gbm_vs_sp500/blob/main/notebooks/analysis.ipynb)
+
 Geometric Brownian Motion (GBM) assumes returns are normally distributed and independent. Neither holds empirically. This project quantifies how large that gap is and tests whether deep learning can close it.
 ### Summary
 - **Data**: S&P-500 daily returns, 2020 - 2026, sourced via yfinance
