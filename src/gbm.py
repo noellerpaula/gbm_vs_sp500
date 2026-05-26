@@ -1,4 +1,6 @@
-
+#GBM simulation based on Mikołaj Hojda, "Geometric Brownian Motion simulation for S&P500", Kaggle, 2023
+# https://www.kaggle.com/code/mikolajhojda/geometric-brownian-motion-simulation-for-s-p500
+#Modifications: corrected time scaling and dt computation, annualized drift and volatility parameters, fixed W(0) = 0 initial condition
 
 import numpy as np
 """ 

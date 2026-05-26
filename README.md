@@ -52,7 +52,8 @@ hybrid_project
 └───README.md
 ```
 ## References
-Cont, R. (2001). Empirical properties of asset returns: stylized facts and statistical issues. *Quantitative Finance*, 1(2), 223–236.
+- Cont, R. (2001). Empirical properties of asset returns: stylized facts and statistical issues. *Quantitative Finance*, 1(2), 223–236.
+- Hojda, M. (2023) *Geometric Brownian Motion simulation for S&P500.*Kaggle.https://www.kaggle.com/code/mikolajhojda/geometric-brownian-motion-simulation-for-s-p500. Modified to correct time scaling, annualize drift and volatility parameters, and fix W(0)=0 initial condition.
 ## Work in Progress
 Part 3 (machine learning models) is currently in development. Code and analysis will be added to this repository upon completion.
 
