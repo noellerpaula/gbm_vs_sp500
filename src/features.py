@@ -1,19 +1,36 @@
-from src.data_loader import load_logreturns, load_prices
 import numpy as np
 import pandas as pd
 
-returns = load_logreturns()
-prices = load_prices()
+# We are trying to captured volatility clustering, so we use this 
+#as motivation for picking our features
+def create_features(returns, vol_window=20, forecast_horizon=5):
 
-realized_vol = returns.rolling(20).std()
-target = realized_vol.shift(-5)
+    df = pd.DataFrame(index=returns.index)
+    #Returns 
+    df["returns"] = returns
+    # Realized volatility to capture medium term volatility state, local volatility structure
+    df["realized_vol"] = (returns.rolling(vol_window).std())
 
-features = pd.DataFrame({
-    "vol_lag1": realized_vol.shift(1),
-    "vol_lag2": realized_vol.shift(2),
-    "vol_lag3": realized_vol.shift(3),
-    "vol_lag4": realized_vol.shift(4),
-    "vol_lag5": realized_vol.shift(5),
-    "sq_return": returns**2,
-    "rolling_mean": returns.rolling(20).mean(),
-})
+    # Lagged Volatility to capture persistence, short term, medium term and long term
+    for lag in [1, 5, 10]:
+        df[f"vol_lag{lag}"] = (df["realized_vol"].shift(lag))
+    
+    # Absolute returns to capture shock magnitude
+    df["abs_return"] = np.abs(returns)
+
+    # Squared returns as pointwise volatility proxy 
+    df["sq_return"] = returns**2
+
+    # Rolling mean 
+    #Local directional regime
+    df["rolling_mean"] = returns.rolling(20).mean()
+   
+
+    # Target variable
+    # future volatility
+    df["target"] = (
+        df["realized_vol"].shift(-forecast_horizon)
+    )
+    df = df.dropna()
+
+    return df 
