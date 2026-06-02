@@ -1,9 +1,12 @@
 import numpy as np
 import pandas as pd
 
+vol_window = 20
+forecast_horizon = 5
+
 # We are trying to captured volatility clustering, so we use this 
 #as motivation for picking our features
-def create_features(returns, vol_window=20, forecast_horizon=5):
+def create_features(returns):
 
     df = pd.DataFrame(index=returns.index)
     #Returns 
@@ -24,6 +27,8 @@ def create_features(returns, vol_window=20, forecast_horizon=5):
     # Rolling mean 
     #Local directional regime
     df["rolling_mean"] = returns.rolling(20).mean()
+
+    df["rolling_excess_kurtosis"] = returns.rolling(20).kurt()
    
 
     # Target variable
@@ -34,3 +39,5 @@ def create_features(returns, vol_window=20, forecast_horizon=5):
     df = df.dropna()
 
     return df 
+
+
