@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-vol_window = 20
+vol_window = 5
 forecast_horizon = 5
 
 # We are trying to captured volatility clustering, so we use this 
