@@ -1,11 +1,13 @@
 import tensorflow as tf
 from tensorflow.keras import Sequential # pyright: ignore[reportMissingModuleSource]
 from tensorflow.keras.layers import Dense, Normalization, Dropout # pyright: ignore[reportMissingModuleSource]
-from tensorflow.keras.callbacks import EarlyStopping # pyright: ignore[reportMissingModuleSource]
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau # pyright: ignore[reportMissingModuleSource]
+from tensorflow.keras.optimizers import Adam # pyright: ignore[reportMissingModuleSource]
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+from arch import arch_model
 import pandas as pd
 import numpy as np
 import random
@@ -25,6 +27,7 @@ tf.random.set_seed(42)
 def train_linear_regression(X_train, Y_train):
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
+    X_train_scaled = pd.DataFrame(X_train_scaled, columns=X_train.columns, index=X_train.index)
     model = LinearRegression()
     model.fit(X_train_scaled, Y_train)
     return model, scaler
@@ -32,41 +35,76 @@ def train_linear_regression(X_train, Y_train):
 #Random Forest Model
 def train_random_forest(X_train, Y_train):
     model = RandomForestRegressor(
-        n_estimators=200,max_depth=3,min_samples_leaf=20,random_state=42,n_jobs=-1
+        n_estimators=200,max_depth=5,min_samples_leaf=30,random_state=42,n_jobs=-1
         )
     model.fit(X_train, Y_train)
     return model
+
+def tune_random_forest(X_train, Y_train):
+    train_size = int(len(X_train)*0.8)
+    X_tr = X_train.iloc[:train_size]
+    X_val = X_train.iloc[train_size:]
+    Y_tr = Y_train.iloc[:train_size]
+    Y_val = Y_train.iloc[train_size:]
+    results = {}
+    for maximum_depth in [1, 2, 3, 4, 5, 10, None]:
+        for min_leaf in [5, 10, 15, 20, 30, 40, 80]:
+            maes = []
+            rf = RandomForestRegressor(
+                max_depth=maximum_depth,
+                min_samples_leaf=min_leaf,
+                n_estimators=200,
+                random_state=42
+                )
+            rf.fit(X_tr, Y_tr)
+            val_mae = mean_absolute_error(Y_val, rf.predict(X_val))
+            maes.append(val_mae)
+            results[(maximum_depth, min_leaf)] =np.mean(maes)
+    best_params = min(results, key=results.get)
+    print(f"Best params: {best_params}")
 # Neural Network Model
 def train_neural_network(X_train, Y_train):
+    reduce_lr = ReduceLROnPlateau(
+        monitor='val_loss',
+        factor=0.5,
+        patience=20,
+        min_lr=0.000001
+    )
     normalizer = Normalization()
     normalizer.adapt(X_train)
     early_stop = tf.keras.callbacks.EarlyStopping(
         monitor='val_loss',
         mode='min',
-        patience=40,
+        patience=60,
         restore_best_weights=True
     )
     model = Sequential([
         normalizer,
-        Dense(128, activation='relu'),
+        Dense(180, activation='relu'),
         Dropout(0.2),
-        Dense(64, activation='relu'),
+        Dense(90, activation='relu'),
         Dropout(0.2),
         Dense(1)
     ],)
 
  
   
-    model.compile(loss='mae',optimizer='adam', metrics=["mse"])
-    history = model.fit(X_train, Y_train,validation_split=0.2, epochs=1000,callbacks=[early_stop], verbose=1)
+    model.compile(loss='mae',optimizer=Adam(learning_rate=0.0001), metrics=["mse"])
+    history = model.fit(X_train, Y_train,validation_split=0.2, epochs=1000,callbacks=[early_stop, reduce_lr], verbose=1)
     return model, history
 def train_reduced_neural_network(X_train, Y_train, layers):
+    reduce_lr = ReduceLROnPlateau(
+        monitor='val_loss',
+        factor=0.5,
+        patience=20,
+        min_lr=0.000001
+    )
     normalizer = Normalization()
     normalizer.adapt(X_train)
     early_stop = tf.keras.callbacks.EarlyStopping(
         monitor='val_loss',
         mode='min',
-        patience=40,
+        patience=60,
         restore_best_weights=True
     )
     model = Sequential([
@@ -76,9 +114,26 @@ def train_reduced_neural_network(X_train, Y_train, layers):
         model.add(Dense(i, activation='relu'))
         model.add(Dropout(0.2))
     model.add(Dense(1))
-    model.compile(loss='mae',optimizer='adam', metrics=["mse"])
-    history = model.fit(X_train, Y_train,validation_split=0.2, epochs=1000,callbacks=[early_stop], verbose=1)
+    model.compile(loss='mae',optimizer=Adam(learning_rate=0.0001), metrics=["mse"])
+    history = model.fit(X_train, Y_train,validation_split=0.2, epochs=1000,callbacks=[early_stop, reduce_lr], verbose=1)
     return model, history
+
+def train_and_predict_garch(returns, Y_test):
+    train_size = int(len(returns)*0.8)
+    horizon = 5
+    garch_vol_forecasts = []
+    dates = []
+    for i in range(train_size, len(returns)-horizon):
+        train = returns.iloc[:i+1]*100
+        model = arch_model(train, vol='Garch', p=1,q=1, mean='Zero',dist='normal')
+        results = model.fit(disp='off', show_warning=False)
+        forecast = results.forecast(horizon=horizon, reindex=False)
+        daily_var = forecast.variance.values[-1,:]
+        pred_vol = (np.sqrt(np.mean(daily_var)))/100
+        garch_vol_forecasts.append(pred_vol)
+        dates.append(returns.index[i])
+    garch_series = pd.Series(garch_vol_forecasts, index=dates)
+    return garch_series
 
 # Shared Evaluation Functions used for all the models. 
 def model_prediction(model, X):
@@ -86,8 +141,12 @@ def model_prediction(model, X):
 
 
 def find_feature_importance(model, X_test, Y_test):
-    X_test_nn = X_test.to_numpy(dtype=np.float32)
-    pred_baseline = model.predict(X_test_nn)
+    is_nn = isinstance(model, tf.keras.Model)
+    if is_nn:
+        X_test_converted = X_test.to_numpy(dtype=np.float32)
+    else:
+        X_test_converted = X_test
+    pred_baseline = model.predict(X_test_converted)
     pred_baseline = pd.Series(pred_baseline.flatten(), index=Y_test.index)
     mae_base = mean_absolute_error(Y_test, pred_baseline)
     results = {}
@@ -96,14 +155,18 @@ def find_feature_importance(model, X_test, Y_test):
         for i in range (50):
             X_perm = X_test.copy()
             X_perm[feature] = np.random.permutation(X_perm[feature])
-            X_perm = X_perm.to_numpy(dtype=np.float32)
-            pred = model.predict(X_perm)
+            if is_nn: 
+                X_perm_converted = X_perm.to_numpy(dtype=np.float32)
+            else:
+                X_perm_converted = X_perm
+            pred = model.predict(X_perm_converted)
             pred = pd.Series(pred.flatten(), index=Y_test.index)
             mae = mae + mean_absolute_error(Y_test, pred)
         mae = 1/50 * mae
         importance = mae - mae_base
         results[feature] = importance
     return results
+
 
 def validate_seed_robustness(X_train, Y_train, X_test, Y_test, arch=[180,90], metric="mae"):
     X_train_nn = X_train.to_numpy(dtype=np.float32)
@@ -127,7 +190,7 @@ def validate_seed_robustness(X_train, Y_train, X_test, Y_test, arch=[180,90], me
     return results
 
 def choose_architecture(X_train, Y_train, X_test, Y_test):
-    architectures = [[16,8],[32,8],[32,16,8],[32,16],[32,16,8],[32,16,8,4],[64,32],[64,32,16],[64,32,16,8],[128,64],[128,64,32], [128,64,32,16],[256,128],[256,128,64],[256,128,64,32], [512,256], [512,256,128], [512,256,128,64]]
+    architectures = [[16,8],[32,8],[32,16,8],[32,16],[32,16,8],[32,16,8,4],[64,32],[64,32,16],[64,32,16,8],[128,64],[128,64,32], [128,64,32,16],[180,90],[180,90,45],[180,90,45,20],[256,128],[256,128,64],[256,128,64,32], [512,256], [512,256,128], [512,256,128,64]]
     results =[]
     for arch in architectures:
         maes = validate_seed_robustness(X_train, Y_train, X_test,Y_test, arch, "val_loss")
