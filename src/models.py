@@ -40,12 +40,7 @@ def train_random_forest(X_train, Y_train):
     model.fit(X_train, Y_train)
     return model
 
-def tune_random_forest(X_train, Y_train):
-    train_size = int(len(X_train)*0.8)
-    X_tr = X_train.iloc[:train_size]
-    X_val = X_train.iloc[train_size:]
-    Y_tr = Y_train.iloc[:train_size]
-    Y_val = Y_train.iloc[train_size:]
+def tune_random_forest(X_train, Y_train, X_val, Y_val):
     results = {}
     for maximum_depth in [1, 2, 3, 4, 5, 10, None]:
         for min_leaf in [5, 10, 15, 20, 30, 40, 80]:
@@ -56,7 +51,7 @@ def tune_random_forest(X_train, Y_train):
                 n_estimators=200,
                 random_state=42
                 )
-            rf.fit(X_tr, Y_tr)
+            rf.fit(X_train, Y_train)
             val_mae = mean_absolute_error(Y_val, rf.predict(X_val))
             maes.append(val_mae)
             results[(maximum_depth, min_leaf)] =np.mean(maes)
@@ -139,7 +134,49 @@ def train_and_predict_garch(returns, Y_test):
 def model_prediction(model, X):
     return model.predict(X)
 
-
+def feature_ablationtest_importance(modeltype,X_train, Y_train, X_validation, Y_validation):
+    if (modeltype == 'rf'):
+        model_base = train_random_forest(X_train, Y_train)
+        X_validation_base = X_validation
+    else:
+        if (modeltype == 'linear'):
+            model_base, scaler_baseline = train_linear_regression(X_train, Y_train)
+            X_validation_base = scaler_baseline.transform(X_validation)
+            X_validation_base = pd.DataFrame(X_validation_base, columns=X_validation.columns, index=X_validation.index)
+        else: 
+            X_train = X_train.to_numpy(dtype=np.float32)
+            Y_train = Y_train.to_numpy(dtype=np.float32)
+            model_base = train_neural_network(X_train, Y_train)
+            X_validation_base = X_validation.to_numpy(dtype=np.float32)
+    
+    pred_baseline = model_base.predict(X_validation_base)
+    pred_baseline = pd.Series(pred_baseline.flatten(), index=Y_validation.index)
+    mae_base = mean_absolute_error(Y_validation, pred_baseline)
+    results = {}
+    importance = 0
+    for feature in X_train.columns:
+        mae = 0
+        X_abl = X_train.drop(columns=[feature])
+        Y_abl = Y_train.drop(columns=[feature])
+        X_validation_modified = X_validation.drop(columns=[feature])
+        if (modeltype == 'rf'): 
+            model = train_random_forest(X_abl,Y_abl)
+        else:
+            if(modeltype == 'linear'):
+                model, scaler = train_linear_regression(X_abl,Y_abl)
+                X_validation_modified = scaler.transform(X_validation_modified)
+                X_validation_modified = pd.DataFrame(X_validation_modified, columns=X_validation.drop(columns=[feature]).columns,index=X_validation.index)
+            else:
+                X_abl = X_abl.to_numpy(dtype=np.float32)
+                Y_abl = Y_abl.to_numpy(dtype=np.float32)
+                model = train_neural_network(X_abl, Y_abl)
+                X_validation_modified = X_validation_modified.to_numpy(dtype=np.float32)
+        pred = model.predict(X_validation_modified)
+        pred = pd.Series(pred.flatten(), index=Y_validation.index)
+        mae = mae + mean_absolute_error(Y_validation, pred)
+        importance = mae - mae_base
+        results[feature] = importance
+    return results
 def find_feature_importance(model, X_test, Y_test):
     is_nn = isinstance(model, tf.keras.Model)
     if is_nn:
@@ -207,7 +244,7 @@ def choose_architecture(X_train, Y_train, X_test, Y_test):
 
 
 
-def evaluate_performance(model_name, pred_train, pred_test,y_train, y_test):
+def evaluate_performance(model_name, pred_train, pred_test,name_testset,y_train, y_test):
     mse_train = mean_squared_error(y_train, pred_train)
     mse_test = mean_squared_error(y_test, pred_test)
     r2_train = r2_score(y_train, pred_train)
@@ -215,7 +252,7 @@ def evaluate_performance(model_name, pred_train, pred_test,y_train, y_test):
     mae_train = mean_absolute_error(y_train, pred_train)
     mae_test = mean_absolute_error(y_test, pred_test)
     results = pd.DataFrame({
-        "Data Set": ["Training Set","Test Set"],
+        "Data Set": ["Training Data",name_testset],
         "MAE": [
             mae_train,
             mae_test
@@ -229,7 +266,7 @@ def evaluate_performance(model_name, pred_train, pred_test,y_train, y_test):
            r2_test
         ]
     })
-    title = model_name + " Model Performance on Training Data vs. Test Data"
+    title = model_name + " Model Performance on Training Data vs. " + name_testset
     print(f"\n{title}")
     print("-"*len(title))
     print(results)
