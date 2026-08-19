@@ -1,3 +1,7 @@
+import os
+os.environ['TF_DETERMINISTIC_OPS'] ='1'
+os.environ['TF_ENABLE_ONEDFNN_OPTS'] = '0'
+os.environ['PYTHONHASHSEED'] = '42'
 import tensorflow as tf
 from tensorflow.keras import Sequential # pyright: ignore[reportMissingModuleSource]
 from tensorflow.keras.layers import Dense, Normalization, Dropout # pyright: ignore[reportMissingModuleSource]
@@ -7,10 +11,13 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+from scipy.stats import ttest_ind
 from arch import arch_model
 import pandas as pd
 import numpy as np
 import random
+import pickle
+import gc
 random.seed(42)
 np.random.seed(42)
 tf.random.set_seed(42)
@@ -209,38 +216,115 @@ def validate_seed_robustness(X_train, Y_train, X_test, Y_test, arch=[180,90], me
     X_train_nn = X_train.to_numpy(dtype=np.float32)
     X_test_nn = X_test.to_numpy(dtype=np.float32)
     y_train_nn = Y_train.to_numpy(dtype=np.float32)
-    seeds = [42, 123, 456, 789, 999, 564, 23, 78, 12]
-    results =[]
+    seeds = [42, 123,168, 456, 789, 999, 564, 23, 78, 12, 94, 37,890,543,856,4,3, 349,654,677]
+    mae_results = []
+    r2_results = []
+    n_params = None
     for seed in seeds:
         tf.random.set_seed(seed)
         np.random.seed(seed)
         model, history = train_reduced_neural_network(X_train_nn, y_train_nn, arch)
+        if n_params is None:
+            n_params = model.count_params()
         y_pred_neural_test = model_prediction(model, X_test_nn)
         y_pred_neural_test = pd.Series(y_pred_neural_test.flatten(), index=Y_test.index)
+        r2_results.append(r2_score(Y_test, y_pred_neural_test))
+
         if (metric == "mae"):
             maes = mean_absolute_error(Y_test, y_pred_neural_test)
         else:
-            maes = history.history["val_loss"][-1]
-        results.append(maes)
-    print(f"Mean MAE: {np.mean(results):.6f}")
-    print(f"Std MAE: {np.std(results):.6f}")
-    return results
+            maes = min(history.history["val_loss"])
+        mae_results.append(maes)
+        # release memory before next seed
+        del model, history
+        tf.keras.backend.clear_session()
+        gc.collect()
+    df = pd.DataFrame({"seed": seeds, "mae": mae_results, "r2": r2_results})
+    df. attrs["n_params"] = n_params
 
-def choose_architecture(X_train, Y_train, X_test, Y_test):
-    architectures = [[16,8],[32,8],[32,16,8],[32,16],[32,16,8],[32,16,8,4],[64,32],[64,32,16],[64,32,16,8],[128,64],[128,64,32], [128,64,32,16],[180,90],[180,90,45],[180,90,45,20],[256,128],[256,128,64],[256,128,64,32], [512,256], [512,256,128], [512,256,128,64]]
-    results =[]
+    print(f"Mean MAE: {df['mae'].mean():.6f}")
+    print(f"Std MAE: {df['mae'].std():.6f}")
+    print(f"Mean R2:  {df['r2'].mean():.4f}")
+    print(f"Std R2:   {df['r2'].std():.4f}")
+    print(f"Params: {n_params}")
+    return df
+
+def choose_architecture(X_train, Y_train, X_test, Y_test, alpha=0.05):
+    architectures = [[16,8],[32,8],[32,16,8],[32,16],[32,16,8],[32,16,8,4],[64,32],[64,32,16],[64,32,16,8],[128,64],[128,64,32], [128,64,32,16],[180,90],[180,90,45],[180,90,45,20],[256,128],[256,128,64],[256,128,64,32], [512,256], [512,256,128],
+                      [512,256,128,64]]
+    raw_path = "../results/raw_results_partial.pkl"
+    summary_path = "../results/architecture_results_partial.csv"
+
+    # resume from checkpoint if available
+    if os.path.exists(raw_path):
+        with open(raw_path, "rb") as f:
+            raw_results = pickle.load(f)
+        print(f"Resuming — {len(raw_results)} architectures already completed.")
+    else:
+        raw_results = {}  # architecture(tuple) -> per seed MAE array
+    summary = []
+    if os.path.exists(summary_path):
+        summary = pd.read_csv(summary_path, converters={'architecture': eval}).to_dict('records')
+
     for arch in architectures:
-        maes = validate_seed_robustness(X_train, Y_train, X_test,Y_test, arch, "val_loss")
-        
-        results.append({
+        if tuple(arch) in raw_results:
+            continue  # already computed, skip retraining
+        df = validate_seed_robustness(X_train, Y_train, X_test, Y_test, arch, "val_loss")
+        raw_results[tuple(arch)] = df['mae'].values
+        summary.append({
             'architecture': arch,
-            'mean': np.mean(maes),
-            'std': np.std(maes)
+            'mean': df['mae'].mean(),
+            'std': df['mae'].std(),
+            'n_params': df.attrs["n_params"],
         })
-        results_df = pd.DataFrame(results)
-        results_df.to_csv("../results/architecture_results.csv", index=False)
-    print(results_df)
-    return results_df
+    # checkpoint both, after every architecture
+        with open(raw_path, "wb") as f:
+            pickle.dump(raw_results, f)
+        pd.DataFrame(summary).to_csv(summary_path, index=False)
+
+    summary_df = pd.DataFrame(summary)
+
+    #Identify best performer by mean val MAE
+    best_idx = summary_df['mean'].idxmin()
+    best_arch = tuple(summary_df.loc[best_idx, 'architecture'])
+    best_values = raw_results[best_arch]
+
+    #Welch's t-test: each architecture vs the best performer
+    p_values = []
+    t_stats = []
+    tied = []
+    for arch in summary_df['architecture']:
+        values = raw_results[tuple(arch)]
+        if tuple(arch) == best_arch:
+            p_values.append(1.0)
+            t_stats.append(0.0) 
+            tied.append(True)
+        else:
+            t_stat, p = ttest_ind(values, best_values, equal_var=False)
+            p_values.append(p)
+            t_stats.append(t_stat)
+            tied.append(p >= alpha) # fail to reject null, thus statistically tied with best
+    summary_df['p_value_vs_best'] = p_values
+    summary_df['t_stat_vs_best'] = t_stats
+    summary_df['tied_with_best'] = tied
+
+   
+
+    # from the tied architectures, pick the on with fewest parameters 
+
+    tied_df = summary_df[summary_df['tied_with_best']]
+    selected = tied_df.loc[tied_df['n_params'].idxmin(), 'architecture']
+
+    # mark the selected architecture before saving
+    summary_df['selected'] = summary_df['architecture'].apply(lambda a: a == selected)
+
+    summary_df = summary_df.sort_values('mean').reset_index(drop=True)
+    summary_df.to_csv("../results/architecture_results.csv", index=False)
+    print(summary_df)
+    print(f"\nBest by mean: {best_arch}")
+    print(f"Statistically tied with best (p >= {alpha}): {tied_df['architecture'].tolist()}")
+    print(f"Selected (simplest tied architecture): {selected}")
+    return summary_df, selected
 
 
 
