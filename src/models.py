@@ -65,7 +65,10 @@ def tune_random_forest(X_train, Y_train, X_val, Y_val):
     best_params = min(results, key=results.get)
     print(f"Best params: {best_params}")
 # Neural Network Model
-def train_neural_network(X_train, Y_train):
+def train_neural_network(X_train, Y_train, seed=42):
+    tf.random.set_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
     reduce_lr = ReduceLROnPlateau(
         monitor='val_loss',
         factor=0.5,
@@ -94,7 +97,10 @@ def train_neural_network(X_train, Y_train):
     model.compile(loss='mae',optimizer=Adam(learning_rate=0.0001), metrics=["mse"])
     history = model.fit(X_train, Y_train,validation_split=0.2, epochs=1000,callbacks=[early_stop, reduce_lr], verbose=1)
     return model, history
-def train_reduced_neural_network(X_train, Y_train, layers):
+def train_reduced_neural_network(X_train, Y_train, layers, seed=42):
+    tf.random.set_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
     reduce_lr = ReduceLROnPlateau(
         monitor='val_loss',
         factor=0.5,
@@ -141,48 +147,58 @@ def train_and_predict_garch(returns, Y_test):
 def model_prediction(model, X):
     return model.predict(X)
 
-def feature_ablationtest_importance(modeltype,X_train, Y_train, X_validation, Y_validation):
+def feature_ablationtest_importance(modeltype, X_train, Y_train, X_validation, Y_validation, seeds=[42, 56,78,95,567]):
     if (modeltype == 'rf'):
         model_base = train_random_forest(X_train, Y_train)
         X_validation_base = X_validation
+        pred_baseline = model_base.predict(X_validation_base)
+        pred_baseline = pd.Series(pred_baseline.flatten(), index=Y_validation.index)
+        mae_base = mean_absolute_error(Y_validation, pred_baseline)
+    elif (modeltype == 'linear'):
+        model_base, scaler_baseline = train_linear_regression(X_train, Y_train)
+        X_validation_base = scaler_baseline.transform(X_validation)
+        X_validation_base = pd.DataFrame(X_validation_base, columns=X_validation.columns, index=X_validation.index)
+        pred_baseline = model_base.predict(X_validation_base)
+        pred_baseline = pd.Series(pred_baseline.flatten(), index=Y_validation.index)
+        mae_base = mean_absolute_error(Y_validation, pred_baseline)
     else:
-        if (modeltype == 'linear'):
-            model_base, scaler_baseline = train_linear_regression(X_train, Y_train)
-            X_validation_base = scaler_baseline.transform(X_validation)
-            X_validation_base = pd.DataFrame(X_validation_base, columns=X_validation.columns, index=X_validation.index)
-        else: 
-            X_train = X_train.to_numpy(dtype=np.float32)
-            Y_train = Y_train.to_numpy(dtype=np.float32)
-            model_base = train_neural_network(X_train, Y_train)
-            X_validation_base = X_validation.to_numpy(dtype=np.float32)
-    
-    pred_baseline = model_base.predict(X_validation_base)
-    pred_baseline = pd.Series(pred_baseline.flatten(), index=Y_validation.index)
-    mae_base = mean_absolute_error(Y_validation, pred_baseline)
+        X_train_np = X_train.to_numpy(dtype=np.float32)
+        Y_train_np = Y_train.to_numpy(dtype=np.float32)
+        baseline_maes = []
+        for seed in seeds:
+            model_base, history_base = train_neural_network(X_train_np, Y_train_np, seed)
+            baseline_maes.append(min(history_base.history['val_loss']))
+        mae_base = np.mean(baseline_maes)
+
     results = {}
-    importance = 0
     for feature in X_train.columns:
-        mae = 0
         X_abl = X_train.drop(columns=[feature])
-        Y_abl = Y_train.drop(columns=[feature])
         X_validation_modified = X_validation.drop(columns=[feature])
-        if (modeltype == 'rf'): 
-            model = train_random_forest(X_abl,Y_abl)
+
+        if (modeltype == 'rf'):
+            model = train_random_forest(X_abl, Y_train)
+            pred = model.predict(X_validation_modified)
+            pred = pd.Series(pred.flatten(), index=Y_validation.index)
+            mae = mean_absolute_error(Y_validation, pred)
+        elif (modeltype == 'linear'):
+            model, scaler = train_linear_regression(X_abl, Y_train)
+            X_validation_modified = scaler.transform(X_validation_modified)
+            X_validation_modified = pd.DataFrame(X_validation_modified, columns=X_abl.columns, index=X_validation.index)
+            pred = model.predict(X_validation_modified)
+            pred = pd.Series(pred.flatten(), index=Y_validation.index)
+            mae = mean_absolute_error(Y_validation, pred)
         else:
-            if(modeltype == 'linear'):
-                model, scaler = train_linear_regression(X_abl,Y_abl)
-                X_validation_modified = scaler.transform(X_validation_modified)
-                X_validation_modified = pd.DataFrame(X_validation_modified, columns=X_validation.drop(columns=[feature]).columns,index=X_validation.index)
-            else:
-                X_abl = X_abl.to_numpy(dtype=np.float32)
-                Y_abl = Y_abl.to_numpy(dtype=np.float32)
-                model = train_neural_network(X_abl, Y_abl)
-                X_validation_modified = X_validation_modified.to_numpy(dtype=np.float32)
-        pred = model.predict(X_validation_modified)
-        pred = pd.Series(pred.flatten(), index=Y_validation.index)
-        mae = mae + mean_absolute_error(Y_validation, pred)
+            X_abl_np = X_abl.to_numpy(dtype=np.float32)
+            Y_train_np = Y_train.to_numpy(dtype=np.float32)
+            feature_maes = []
+            for seed in seeds:
+                model, history = train_neural_network(X_abl_np, Y_train_np, seed)
+                feature_maes.append(min(history.history['val_loss']))
+            mae = np.mean(feature_maes)
+
         importance = mae - mae_base
         results[feature] = importance
+
     return results
 def find_feature_importance(model, X_test, Y_test):
     is_nn = isinstance(model, tf.keras.Model)
@@ -211,6 +227,22 @@ def find_feature_importance(model, X_test, Y_test):
         results[feature] = importance
     return results
 
+def find_feature_importance_multiseed(X_train, Y_train, X_test, Y_test, seeds=[42, 1, 2, 3, 4]):
+    X_train_np = X_train.to_numpy(dtype=np.float32)
+    Y_train_np = Y_train.to_numpy(dtype=np.float32)
+
+    all_seed_results = []
+    for seed in seeds:
+        model, history = train_neural_network(X_train_np, Y_train_np, seed)
+        seed_result = find_feature_importance(model, X_test, Y_test)
+        all_seed_results.append(seed_result)
+
+    final = {}
+    for feature in X_test.columns:
+        vals = [r[feature] for r in all_seed_results]
+        final[feature] = (np.mean(vals), np.std(vals))
+    return final
+
 
 def validate_seed_robustness(X_train, Y_train, X_test, Y_test, arch=[180,90], metric="mae"):
     X_train_nn = X_train.to_numpy(dtype=np.float32)
@@ -221,9 +253,7 @@ def validate_seed_robustness(X_train, Y_train, X_test, Y_test, arch=[180,90], me
     r2_results = []
     n_params = None
     for seed in seeds:
-        tf.random.set_seed(seed)
-        np.random.seed(seed)
-        model, history = train_reduced_neural_network(X_train_nn, y_train_nn, arch)
+        model, history = train_reduced_neural_network(X_train_nn, y_train_nn, arch, seed)
         if n_params is None:
             n_params = model.count_params()
         y_pred_neural_test = model_prediction(model, X_test_nn)
@@ -390,3 +420,4 @@ def compare_prediction(title, y_pred1, model1name, y_pred2, model2name, y):
     print(f"\n{title}")
     print("-"*len(title))
     print(results)
+    return results
