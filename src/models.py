@@ -95,7 +95,7 @@ def train_neural_network(X_train, Y_train, seed=42):
  
   
     model.compile(loss='mae',optimizer=Adam(learning_rate=0.0001), metrics=["mse"])
-    history = model.fit(X_train, Y_train,validation_split=0.2, epochs=1000,callbacks=[early_stop, reduce_lr], verbose=1)
+    history = model.fit(X_train, Y_train,validation_split=0.2, epochs=1000,callbacks=[early_stop, reduce_lr], verbose=0)
     return model, history
 def train_reduced_neural_network(X_train, Y_train, layers, seed=42):
     tf.random.set_seed(seed)
@@ -123,7 +123,7 @@ def train_reduced_neural_network(X_train, Y_train, layers, seed=42):
         model.add(Dropout(0.2))
     model.add(Dense(1))
     model.compile(loss='mae',optimizer=Adam(learning_rate=0.0001), metrics=["mse"])
-    history = model.fit(X_train, Y_train,validation_split=0.2, epochs=1000,callbacks=[early_stop, reduce_lr], verbose=1)
+    history = model.fit(X_train, Y_train,validation_split=0.2, epochs=1000,callbacks=[early_stop, reduce_lr], verbose=0)
     return model, history
 
 def train_and_predict_garch(returns, Y_test):
