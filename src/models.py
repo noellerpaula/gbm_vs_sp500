@@ -65,7 +65,7 @@ def tune_random_forest(X_train, Y_train, X_val, Y_val):
     best_params = min(results, key=results.get)
     print(f"Best params: {best_params}")
 # Neural Network Model
-def train_neural_network(X_train, Y_train, seed=42):
+def train_neural_network(X_train, Y_train, X_validation, Y_validation, seed=42):
     tf.random.set_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
@@ -85,9 +85,9 @@ def train_neural_network(X_train, Y_train, seed=42):
     )
     model = Sequential([
         normalizer,
-        Dense(180, activation='relu'),
+        Dense(256, activation='relu'),
         Dropout(0.2),
-        Dense(90, activation='relu'),
+        Dense(128, activation='relu'),
         Dropout(0.2),
         Dense(1)
     ],)
@@ -95,9 +95,9 @@ def train_neural_network(X_train, Y_train, seed=42):
  
   
     model.compile(loss='mae',optimizer=Adam(learning_rate=0.0001), metrics=["mse"])
-    history = model.fit(X_train, Y_train,validation_split=0.2, epochs=1000,callbacks=[early_stop, reduce_lr], verbose=0)
+    history = model.fit(X_train, Y_train,validation_data=(X_validation,Y_validation), epochs=1000,callbacks=[early_stop, reduce_lr], verbose=0)
     return model, history
-def train_reduced_neural_network(X_train, Y_train, layers, seed=42):
+def train_reduced_neural_network(X_train, Y_train, layers, X_validation, Y_validation, seed=42):
     tf.random.set_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
@@ -123,7 +123,7 @@ def train_reduced_neural_network(X_train, Y_train, layers, seed=42):
         model.add(Dropout(0.2))
     model.add(Dense(1))
     model.compile(loss='mae',optimizer=Adam(learning_rate=0.0001), metrics=["mse"])
-    history = model.fit(X_train, Y_train,validation_split=0.2, epochs=1000,callbacks=[early_stop, reduce_lr], verbose=0)
+    history = model.fit(X_train, Y_train,validation_data=(X_validation,Y_validation), epochs=1000,callbacks=[early_stop, reduce_lr], verbose=0)
     return model, history
 
 def train_and_predict_garch(returns, Y_test):
@@ -164,9 +164,11 @@ def feature_ablationtest_importance(modeltype, X_train, Y_train, X_validation, Y
     else:
         X_train_np = X_train.to_numpy(dtype=np.float32)
         Y_train_np = Y_train.to_numpy(dtype=np.float32)
+        X_validation_np = X_validation.to_numpy(dtype=np.float32)
+        Y_validation_np = Y_validation.to_numpy(dtype=np.float32)
         baseline_maes = []
         for seed in seeds:
-            model_base, history_base = train_neural_network(X_train_np, Y_train_np, seed)
+            model_base, history_base = train_neural_network(X_train_np, Y_train_np,X_validation_np, Y_validation_np, seed)
             baseline_maes.append(min(history_base.history['val_loss']))
         mae_base = np.mean(baseline_maes)
 
@@ -190,9 +192,10 @@ def feature_ablationtest_importance(modeltype, X_train, Y_train, X_validation, Y
         else:
             X_abl_np = X_abl.to_numpy(dtype=np.float32)
             Y_train_np = Y_train.to_numpy(dtype=np.float32)
+            X_validation_modified_np = X_validation_modified.to_numpy(dtype=np.float32)
             feature_maes = []
             for seed in seeds:
-                model, history = train_neural_network(X_abl_np, Y_train_np, seed)
+                model, history = train_neural_network(X_abl_np, Y_train_np,X_validation_modified,Y_validation_np, seed)
                 feature_maes.append(min(history.history['val_loss']))
             mae = np.mean(feature_maes)
 
@@ -227,44 +230,50 @@ def find_feature_importance(model, X_test, Y_test):
         results[feature] = importance
     return results
 
-def find_feature_importance_multiseed(X_train, Y_train, X_test, Y_test, seeds=[42, 1, 2, 3, 4]):
+def find_feature_importance_multiseed(X_train, Y_train, X_validation, Y_validation, seeds=[42, 1, 2, 3, 4]):
     X_train_np = X_train.to_numpy(dtype=np.float32)
     Y_train_np = Y_train.to_numpy(dtype=np.float32)
-
+    X_validation_np = X_train.to_numpy(dtype=np.float32)
+    Y_validation_np = X_train.to_numpy(dtype=np.float32)
     all_seed_results = []
     for seed in seeds:
-        model, history = train_neural_network(X_train_np, Y_train_np, seed)
-        seed_result = find_feature_importance(model, X_test, Y_test)
+        model, history = train_neural_network(X_train_np, Y_train_np, X_validation_np,Y_validation_np,seed)
+        seed_result = find_feature_importance(model, X_validation, Y_validation)
         all_seed_results.append(seed_result)
 
     final = {}
-    for feature in X_test.columns:
+    for feature in X_validation.columns:
         vals = [r[feature] for r in all_seed_results]
         final[feature] = (np.mean(vals), np.std(vals))
     return final
 
 
-def validate_seed_robustness(X_train, Y_train, X_test, Y_test, arch=[180,90], metric="mae"):
+def validate_seed_robustness(X_train, Y_train, X_validation, Y_validation, X_test, Y_test, arch=[256,128], metric="mae"):
     X_train_nn = X_train.to_numpy(dtype=np.float32)
     X_test_nn = X_test.to_numpy(dtype=np.float32)
     y_train_nn = Y_train.to_numpy(dtype=np.float32)
+    X_validation_nn = X_validation.to_numpy(dtype=np.float32)
+    Y_validation_nn = Y_validation.to_numpy(dtype=np.float32)
     seeds = [42, 123,168, 456, 789, 999, 564, 23, 78, 12, 94, 37,890,543,856,4,3, 349,654,677]
     mae_results = []
     r2_results = []
     n_params = None
     for seed in seeds:
-        model, history = train_reduced_neural_network(X_train_nn, y_train_nn, arch, seed)
+        model, history = train_reduced_neural_network(X_train_nn, y_train_nn, arch,X_validation_nn,Y_validation_nn, seed)
         if n_params is None:
             n_params = model.count_params()
-        y_pred_neural_test = model_prediction(model, X_test_nn)
-        y_pred_neural_test = pd.Series(y_pred_neural_test.flatten(), index=Y_test.index)
-        r2_results.append(r2_score(Y_test, y_pred_neural_test))
-
-        if (metric == "mae"):
-            maes = mean_absolute_error(Y_test, y_pred_neural_test)
+        if metric == "mae":
+            y_pred = model_prediction(model, X_test_nn)
+            y_pred = pd.Series(y_pred.flatten(), index=Y_test.index)
+            maes = mean_absolute_error(Y_test, y_pred)
+            r2 = r2_score(Y_test, y_pred)
         else:
+            y_pred = model_prediction(model, X_validation_nn)
+            y_pred = pd.Series(y_pred.flatten(), index=Y_validation.index)
             maes = min(history.history["val_loss"])
+            r2 = r2_score(Y_validation, y_pred)
         mae_results.append(maes)
+        r2_results.append(r2)
         # release memory before next seed
         del model, history
         tf.keras.backend.clear_session()
@@ -279,7 +288,7 @@ def validate_seed_robustness(X_train, Y_train, X_test, Y_test, arch=[180,90], me
     print(f"Params: {n_params}")
     return df
 
-def choose_architecture(X_train, Y_train, X_test, Y_test, alpha=0.05):
+def choose_architecture(X_train, Y_train,X_validation,Y_validation, alpha=0.05):
     architectures = [[16,8],[32,8],[32,16,8],[32,16],[32,16,8],[32,16,8,4],[64,32],[64,32,16],[64,32,16,8],[128,64],[128,64,32], [128,64,32,16],[180,90],[180,90,45],[180,90,45,20],[256,128],[256,128,64],[256,128,64,32], [512,256], [512,256,128],
                       [512,256,128,64]]
     raw_path = "../results/raw_results_partial.pkl"
@@ -299,7 +308,7 @@ def choose_architecture(X_train, Y_train, X_test, Y_test, alpha=0.05):
     for arch in architectures:
         if tuple(arch) in raw_results:
             continue  # already computed, skip retraining
-        df = validate_seed_robustness(X_train, Y_train, X_test, Y_test, arch, "val_loss")
+        df = validate_seed_robustness(X_train, Y_train,X_validation,Y_validation, X_validation, Y_validation, arch, "val_loss")
         raw_results[tuple(arch)] = df['mae'].values
         summary.append({
             'architecture': arch,
